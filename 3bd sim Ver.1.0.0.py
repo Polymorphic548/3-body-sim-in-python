@@ -482,34 +482,41 @@ class ThreeBodySimulation:
         if self.is_running or len(self.time_history) == 0:
             messagebox.showwarning("Cannot Export", "Please pause the simulation after it has run at least one step to export data.")
             return
-
+    
         file_path = filedialog.asksaveasfilename(defaultextension=".csv",
-                                                filetypes=[("CSV files","*.csv"), ("All files","*.*")],
-                                                title="Save raw simulation data as...")
+                                                 filetypes=[("CSV files","*.csv"), ("All files","*.*")],
+                                                 title="Save raw simulation data as...")
         if not file_path:
             return
-
+    
         try:
+            # Create header for position and time
             header = ["time_s"]
             for i in range(self.num_bodies):
                 header += [f"x{i+1}_m", f"y{i+1}_m", f"z{i+1}_m"]
-
+    
             with open(file_path, mode='w', newline='') as csvfile:
+                # 1) Write mass as CSV comment lines
+                csvfile.write(f"# m1 = {self.masses[0]}\n")
+                csvfile.write(f"# m2 = {self.masses[1]}\n")
+                csvfile.write(f"# m3 = {self.masses[2]}\n\n")
+    
+                # 2) Write actual CSV header
                 writer = csv.writer(csvfile)
                 writer.writerow(header)
-
+    
+                # 3) Write simulation data rows
                 n_rows = len(self.time_history)
                 for idx in range(n_rows):
-                    row = []
-                    row.append(self.time_history[idx])
+                    row = [self.time_history[idx]]
                     row.extend(self.positions_history[idx])
                     writer.writerow(row)
-
+    
             messagebox.showinfo("Export Successful", f"Raw simulation data saved to:\n{file_path}")
+    
         except Exception as e:
             messagebox.showerror("Export Error", f"Error saving CSV:\n{e}")
-
-
+    
 def main():
     root = tk.Tk()
     app = ThreeBodySimulation(root)

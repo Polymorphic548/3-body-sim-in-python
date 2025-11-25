@@ -2,9 +2,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from scipy.integrate import odeint
-# as of 21/11/2025 i am still learning python syntax so took help from github copilot's inline suggestions
+import csv
+import os
+
+# as of 21/11/2025 i am still learning phython syntax so took help from github copilots inline code suggestions
 # but all the code logic and structure was developed by me
 # Constants 
 G = 6.67430e-11  # Gravitational constant
@@ -90,6 +93,12 @@ class ThreeBodySimulation:
         self.current_y = np.concatenate([np.array(self.current_positions).flatten(),
                                          np.array(self.current_velocities).flatten()])
 
+        # --- Histories for export 
+        # Each history is cleared on reset.
+        self.time_history = []  # list of floats
+        # positions_history: list of lists length num_bodies of 3 floats -> store flattened per timestep
+        self.positions_history = []  # each element: flattened positions [x1,y1,z1,x2,]
+
         # --- GUI Setup ---
         self.create_widgets()
         self.initialize_plot()
@@ -138,6 +147,10 @@ class ThreeBodySimulation:
         
         ttk.Button(control_frame, text="Auto-Scale View", command=self.auto_scale_view).pack(side=tk.LEFT, padx=7)
 
+        # Download CSV button (disabled initially)
+        self.download_button = ttk.Button(control_frame, text="📄 Download CSV", command=self.save_to_csv, state=tk.DISABLED)
+        self.download_button.pack(side=tk.LEFT, padx=7)
+
         # Time Scale Entry instead of Slider
         ttk.Label(control_frame, text="Time Scale (x):").pack(side=tk.LEFT, padx=(15, 0))
         self.time_scale_entry = ttk.Entry(control_frame, width=10)
@@ -178,7 +191,7 @@ class ThreeBodySimulation:
             self.reset_simulation()
             self.auto_scale_view() # Auto-scale after applying new conditions
         except ValueError as ve:
-            messagebox.showerror("Input Error", f"Please check your number format (e.g., 1.23e-4 or 123.45). For position/velocity, use comma-separated values like '1e10,0,0'. Error: {ve}")
+            messagebox.showerror("Input Error", f"Please check your number format (e.g. 1.23e-4 or 123.45). For position/velocity, use comma-separated values like '1e10,0,0'. Error: {ve}")
         except Exception as e:
             messagebox.showerror("Error", f"An unexpected error occurred during input parsing: {e}")
 
@@ -257,6 +270,7 @@ class ThreeBodySimulation:
         dx_canvas = event.x - self.press_x_canvas
         dy_canvas = event.y - self.press_y_canvas
 
+        # this is the same function used in autocad software for zooming and was directly adapted here 
         if self.button_press_event.button == 1: # Left-click for CUSTOM 3D Rotation
             self.current_azim = (self.current_azim - dx_canvas * 0.2) % 360
             self.current_elev = (self.current_elev - dy_canvas * 0.2) 
@@ -306,7 +320,7 @@ class ThreeBodySimulation:
 
     def set_plot_limits(self):
         """Dynamically adjusts plot limits or applies stored manual limits."""
-        # If view_limits are manually set (e.g., by mouse interaction), use them
+        # If view_limits are manually set (e.g. by mouse interaction), use them
         if self.view_limits is not None:
             self.ax.set_xlim(self.view_limits[0])
             self.ax.set_ylim(self.view_limits[1])
@@ -332,7 +346,7 @@ class ThreeBodySimulation:
         all_y.extend(current_pos_array[:, 1])
         all_z.extend(current_pos_array[:, 2])
 
-        if not all_x: # Fallback if no data at all (e.g., just after initial setup with 0,0,0)
+        if not all_x: # Fallback if no data at all (e.g. just after initial setup with 0,0,0)
             initial_x = [pos[0] for pos in self.initial_positions]
             initial_y = [pos[1] for pos in self.initial_positions]
             initial_z = [pos[2] for pos in self.initial_positions]
@@ -386,6 +400,11 @@ class ThreeBodySimulation:
         self.trace_data = [[] for _ in range(self.num_bodies)]
         self.view_limits = None # Clear manual view limits on reset
         
+        self.time_history.clear()
+        self.positions_history.clear()
+
+        self.download_button.config(state=tk.DISABLED)
+        
         self.time_label.config(text="Simulated Time: 0.0 s")
         self.update_plot_elements() # Redraw plot to show reset state
 
@@ -394,9 +413,16 @@ class ThreeBodySimulation:
         self.is_running = not self.is_running
         if self.is_running:
             self.play_pause_button.config(text="Pause")
+            # When starting, disable download button
+            self.download_button.config(state=tk.DISABLED)
             self.update_simulation()
         else:
             self.play_pause_button.config(text="Play")
+            # When paused: enable download only if simulation has run at least one step
+            if len(self.time_history) > 0:
+                self.download_button.config(state=tk.NORMAL)
+            else:
+                self.download_button.config(state=tk.DISABLED)
 
     def update_plot_elements(self):
         """Updates the positions of spheres and paths on the plot."""
@@ -415,6 +441,17 @@ class ThreeBodySimulation:
 
         self.set_plot_limits() # Adjust plot limits (either auto or manual)
         self.canvas.draw_idle() # Redraw the canvas (optimized for animation)
+
+    def update_histories(self):
+        t = self.total_simulated_time
+        self.time_history.append(t)
+        if len(self.time_history) > self.max_history_points:
+            self.time_history.pop(0)
+
+        pos_flat = np.array(self.current_positions).flatten().tolist()
+        self.positions_history.append(pos_flat)
+        if len(self.positions_history) > self.max_history_points:
+            self.positions_history.pop(0)
 
     def update_simulation(self):
         """Performs one step of the simulation and updates the plot."""
@@ -436,7 +473,42 @@ class ThreeBodySimulation:
 
             self.update_plot_elements()
 
+            # update histories (store data in memory for export)
+            self.update_histories()
+
             self.master.after(50, self.update_simulation) # Schedule the next update
+
+    def save_to_csv(self):
+        if self.is_running or len(self.time_history) == 0:
+            messagebox.showwarning("Cannot Export", "Please pause the simulation after it has run at least one step to export data.")
+            return
+
+        file_path = filedialog.asksaveasfilename(defaultextension=".csv",
+                                                filetypes=[("CSV files","*.csv"), ("All files","*.*")],
+                                                title="Save raw simulation data as...")
+        if not file_path:
+            return
+
+        try:
+            header = ["time_s"]
+            for i in range(self.num_bodies):
+                header += [f"x{i+1}_m", f"y{i+1}_m", f"z{i+1}_m"]
+
+            with open(file_path, mode='w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(header)
+
+                n_rows = len(self.time_history)
+                for idx in range(n_rows):
+                    row = []
+                    row.append(self.time_history[idx])
+                    row.extend(self.positions_history[idx])
+                    writer.writerow(row)
+
+            messagebox.showinfo("Export Successful", f"Raw simulation data saved to:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Error saving CSV:\n{e}")
+
 
 def main():
     root = tk.Tk()
